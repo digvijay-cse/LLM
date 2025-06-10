@@ -1,3 +1,4 @@
+pip install --index-url https://pypi.org/simple/ --trusted-host pypi.org pymupdf
 # 🧩 Step 1: Install required packages
 !pip install faiss-cpu PyMuPDF sentence-transformers tqdm
 
