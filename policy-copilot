@@ -1,0 +1,120 @@
+# 🧩 Step 1: Install required packages
+!pip install faiss-cpu PyMuPDF sentence-transformers tqdm
+
+# 🧠 Step 2: Import libraries
+import os
+import fitz  # PyMuPDF
+import faiss
+import json
+from tqdm import tqdm
+from typing import List, Tuple
+from sentence_transformers import SentenceTransformer
+
+# 📁 Step 3: Paths and model
+PDF_DIR = "./policy_docs"          # Path to folder containing PDFs
+INDEX_OUTPUT = "./index_output"    # Output folder for FAISS index and metadata
+os.makedirs(INDEX_OUTPUT, exist_ok=True)
+
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")  # Free, small, accurate
+
+# 📄 Step 4: Extract lines with line numbers
+def extract_text_with_lines(pdf_path: str) -> List[Tuple[str, int]]:
+    doc = fitz.open(pdf_path)
+    lines = []
+    for page in doc:
+        text = page.get_text().split("\n")
+        for i, line in enumerate(text):
+            if line.strip():
+                lines.append((line.strip(), i + 1))
+    return lines
+
+# 🔠 Step 5: Group by subheading
+def group_by_subheading(lines: List[Tuple[str, int]]) -> List[dict]:
+    sections = []
+    current_section = {"heading": "General", "lines": []}
+    for line, num in lines:
+        if len(line.split()) < 10 and line.isupper():
+            if current_section["lines"]:
+                sections.append(current_section)
+            current_section = {"heading": line.strip(), "lines": []}
+        else:
+            current_section["lines"].append((line, num))
+    if current_section["lines"]:
+        sections.append(current_section)
+    return sections
+
+# 🧱 Step 6: Chunk by subheading
+def chunk_with_subheadings(sections: List[dict], chunk_size: int = 5):
+    chunks = []
+    for section in sections:
+        heading = section["heading"]
+        lines = section["lines"]
+        for i in range(0, len(lines), chunk_size):
+            chunk_lines = lines[i:i + chunk_size]
+            chunk_text = f"{heading}\n" + " ".join(line for line, _ in chunk_lines)
+            line_start = chunk_lines[0][1]
+            line_end = chunk_lines[-1][1]
+            chunks.append({
+                "text": chunk_text,
+                "line_start": line_start,
+                "line_end": line_end,
+                "section": heading
+            })
+    return chunks
+
+# 🧠 Step 7: Build FAISS index with metadata
+def build_faiss_index(pdf_dir: str):
+    texts = []
+    metadata = []
+    for fname in tqdm(os.listdir(pdf_dir)):
+        if not fname.lower().endswith(".pdf"):
+            continue
+        fpath = os.path.join(pdf_dir, fname)
+        lines = extract_text_with_lines(fpath)
+        sections = group_by_subheading(lines)
+        chunks = chunk_with_subheadings(sections)
+        for chunk in chunks:
+            texts.append(chunk["text"])
+            metadata.append({
+                "document": fname,
+                "line_start": chunk["line_start"],
+                "line_end": chunk["line_end"],
+                "section": chunk["section"]
+            })
+
+    embeddings = embedding_model.encode(texts, show_progress_bar=True)
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embeddings)
+
+    faiss.write_index(index, os.path.join(INDEX_OUTPUT, "policy_index.faiss"))
+    with open(os.path.join(INDEX_OUTPUT, "metadata.json"), "w") as f:
+        json.dump(metadata, f)
+
+    print(f"✅ Indexed {len(texts)} chunks from {len(metadata)} entries.")
+
+# 🔍 Step 8: Retrieve chunks with citations
+def retrieve_relevant_chunks(query: str, top_k: int = 5):
+    index = faiss.read_index(os.path.join(INDEX_OUTPUT, "policy_index.faiss"))
+    with open(os.path.join(INDEX_OUTPUT, "metadata.json")) as f:
+        metadata = json.load(f)
+
+    query_vec = embedding_model.encode([query])
+    D, I = index.search(query_vec, top_k)
+
+    results = []
+    for i in I[0]:
+        if i < len(metadata):
+            results.append(metadata[i])
+    return results
+
+# ✅ Step 9: Build index (run once)
+build_faiss_index(PDF_DIR)
+
+# 🧪 Step 10: Example question
+query = "What is the refund policy for cancellation?"
+results = retrieve_relevant_chunks(query, top_k=3)
+
+print(f"\n🔍 Results for: {query}\n")
+for r in results:
+    print(f"📄 {r['document']} | Section: {r['section']} | Lines: {r['line_start']}-{r['line_end']}")
