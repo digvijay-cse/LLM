@@ -82,3 +82,25 @@ print("\n📚 Sources:")
 for doc in response["source_documents"]:
     md = doc.metadata
     print(f"- 📄 {md['document']} | Section: {md['section']} | Lines: {md['line_start']}-{md['line_end']}")
+
+
+
+
+import os
+import requests
+
+# Create model directory
+os.makedirs("./models", exist_ok=True)
+
+# Model URL (Q4_0 version from Hugging Face)
+url = "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistral-7b-instruct-v0.1.Q4_0.gguf"
+local_path = "./models/mistral-7b-instruct-v0.1.Q4_0.gguf"
+
+# Download with streaming
+with requests.get(url, stream=True) as r:
+    r.raise_for_status()
+    with open(local_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+print("✅ Download complete:", local_path)
